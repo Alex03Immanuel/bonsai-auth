@@ -56,11 +56,8 @@ app.UseSerilogRequestLogging();
 
 // SWAGGER IN DEV ONLY
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.MapControllers();
 
