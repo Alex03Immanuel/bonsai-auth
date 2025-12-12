@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "m057uHbp1cejhoRwQj71oa8GPjj6cW79St7hCTrQGqY=",
+  "Source": "bonsai-auth",
+  "BasePath": "_content/bonsai-auth",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

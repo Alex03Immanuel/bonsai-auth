@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: bonsai-auth
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    branch: main
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 3000
