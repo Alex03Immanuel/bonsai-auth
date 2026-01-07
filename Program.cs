@@ -70,6 +70,22 @@ builder.Host.UseSerilog();
 Log.Information("Application starting up");
 Log.Information("Environment: {Environment}", builder.Environment.EnvironmentName);
 
+// CORS Configuration - Allow frontend to call API
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.WithOrigins(
+                "https://bonsai-auth-frontend.onrender.com",
+                "http://localhost:5500",  // For local development
+                "http://127.0.0.1:5500"   // For local development
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 // DEPENDENCY INJECTION
 builder.Services.AddSingleton<IUserStore, InMemoryUserStore>();
 builder.Services.AddSingleton<IOtpStore, RedisOtpStore>();
@@ -81,6 +97,9 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// Use CORS - MUST be before other middleware
+app.UseCors("AllowFrontend");
 
 // Request logging middleware
 app.UseSerilogRequestLogging(options =>
