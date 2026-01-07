@@ -43,25 +43,12 @@ if (!string.IsNullOrEmpty(esUri))
             BatchPostingLimit = 50,
             Period = TimeSpan.FromSeconds(2),
             
-            // Error handling - log failures to console
-            FailureCallback = (logEvent, ex) => 
-            {
-                Console.Error.WriteLine($"[Elasticsearch Sink Failure] {ex?.Message}");
-                Console.Error.WriteLine($"[Failed Log Event] {logEvent.RenderMessage()}");
-            },
+            // Error handling - use SelfLog for failures
             EmitEventFailure = EmitEventFailureHandling.WriteToSelfLog |
-                               EmitEventFailureHandling.WriteToFailureSink |
                                EmitEventFailureHandling.RaiseCallback,
             
             // Connection settings
-            ConnectionTimeout = TimeSpan.FromSeconds(30),
-            
-            // Type name handling for OpenSearch compatibility
-            TypeName = null,
-            
-            // Buffer settings
-            BufferBaseFilename = null, // Don't buffer to disk
-            BufferLogShippingInterval = TimeSpan.FromSeconds(5)
+            ConnectionTimeout = TimeSpan.FromSeconds(30)
         });
         
         Console.WriteLine("[Startup] Elasticsearch sink configured successfully");
@@ -108,7 +95,7 @@ app.UseSerilogRequestLogging(options =>
     {
         diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
         diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"].ToString());
-        diagnosticContext.Set("ClientIP", httpContext.Connection.RemoteIpAddress?.ToString());
+        diagnosticContext.Set("ClientIP", httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown");
     };
 });
 
