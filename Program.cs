@@ -1,16 +1,22 @@
 using Serilog;
-using Serilog.Sinks.Elasticsearch;
+using Serilog.Formatting.Elasticsearch;
+using Serilog.Sinks.Http;
 using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.IO;
+using System.Threading.Tasks;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Enable Serilog self-logging to diagnose sink issues
 Serilog.Debugging.SelfLog.Enable(Console.Error);
 
-// GET THE ENVIRONMENT VARIABLES FOR ELASTICSEARCH LOGGING
+// GET THE ENVIRONMENT VARIABLES FOR ELASTICSEARCH/OPENSEARCH LOGGING
 var esUri = Environment.GetEnvironmentVariable("BONSAI_URL");
 
-// CONFIGURING LOGGER MACHINE 
+// CONFIGURING LOGGER
 var loggerCfg = new LoggerConfiguration()
     .MinimumLevel.Information()
     .Enrich.FromLogContext()
@@ -19,43 +25,35 @@ var loggerCfg = new LoggerConfiguration()
     .Enrich.WithProperty("Application", "bonsai-auth")
     .WriteTo.Console();
 
-// If BONSAI_URL is set, configure Elasticsearch sink 
+// If BONSAI_URL is set, configure HTTP sink for OpenSearch
 if (!string.IsNullOrEmpty(esUri))
 {
-    Console.WriteLine($"[Startup] Configuring Elasticsearch sink with URI: {new Uri(esUri).Host}");
-    
     try
     {
-        loggerCfg.WriteTo.Elasticsearch(new ElasticsearchSinkOptions(new Uri(esUri))
-        {
-            // OpenSearch 2.x compatibility settings
-            AutoRegisterTemplate = true,
-            AutoRegisterTemplateVersion = AutoRegisterTemplateVersion.ESv7,
-            
-            // Index naming pattern - creates daily indices
-            IndexFormat = "auth-logs-{0:yyyy.MM.dd}",
-            
-            // Bonsai hobby tier settings (single node)
-            NumberOfReplicas = 0,
-            NumberOfShards = 1,
-            
-            // Batch settings for better performance
-            BatchPostingLimit = 50,
-            Period = TimeSpan.FromSeconds(2),
-            
-            // Error handling - use SelfLog for failures
-            EmitEventFailure = EmitEventFailureHandling.WriteToSelfLog |
-                               EmitEventFailureHandling.RaiseCallback,
-            
-            // Connection settings
-            ConnectionTimeout = TimeSpan.FromSeconds(30)
-        });
+        var uri = new Uri(esUri);
+        var indexName = $"auth-logs-{DateTime.UtcNow:yyyy.MM.dd}";
+        var bulkEndpoint = $"{uri.Scheme}://{uri.Host}:{(uri.Port > 0 ? uri.Port : 443)}/_bulk";
         
-        Console.WriteLine("[Startup] Elasticsearch sink configured successfully");
+        // Extract credentials from URI
+        var credentials = uri.UserInfo;
+        
+        Console.WriteLine($"[Startup] Configuring OpenSearch HTTP sink");
+        Console.WriteLine($"[Startup] Host: {uri.Host}");
+        Console.WriteLine($"[Startup] Index pattern: auth-logs-yyyy.MM.dd");
+        
+        loggerCfg.WriteTo.Http(
+            requestUri: bulkEndpoint,
+            queueLimitBytes: null,
+            textFormatter: new ElasticsearchJsonFormatter(renderMessageTemplate: false, inlineFields: true),
+            batchFormatter: new OpenSearchBatchFormatter(indexName),
+            httpClient: new OpenSearchHttpClient(credentials)
+        );
+        
+        Console.WriteLine("[Startup] OpenSearch HTTP sink configured successfully");
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"[Startup] Failed to configure Elasticsearch sink: {ex.Message}");
+        Console.Error.WriteLine($"[Startup] Failed to configure OpenSearch sink: {ex.Message}");
         Console.Error.WriteLine($"[Startup] Stack trace: {ex.StackTrace}");
     }
 }
@@ -87,10 +85,7 @@ var app = builder.Build();
 // Request logging middleware
 app.UseSerilogRequestLogging(options =>
 {
-    // Customize the message template
     options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
-    
-    // Attach additional properties to the request completion event
     options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
     {
         diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
@@ -114,3 +109,76 @@ app.Lifetime.ApplicationStopped.Register(() =>
 });
 
 app.Run();
+
+// Custom HTTP client for OpenSearch with Basic Auth
+public class OpenSearchHttpClient : IHttpClient
+{
+    private readonly HttpClient _httpClient;
+
+    public OpenSearchHttpClient(string credentials)
+    {
+        _httpClient = new HttpClient();
+        
+        if (!string.IsNullOrEmpty(credentials))
+        {
+            var authBytes = Encoding.ASCII.GetBytes(credentials);
+            var authHeader = Convert.ToBase64String(authBytes);
+            _httpClient.DefaultRequestHeaders.Authorization = 
+                new AuthenticationHeaderValue("Basic", authHeader);
+        }
+        
+        _httpClient.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+    }
+
+    public void Configure(IConfiguration configuration) { }
+
+    public async Task<HttpResponseMessage> PostAsync(string requestUri, Stream contentStream)
+    {
+        using var content = new StreamContent(contentStream);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        
+        var response = await _httpClient.PostAsync(requestUri, content);
+        
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            Console.Error.WriteLine($"[OpenSearch] Error: {response.StatusCode} - {body}");
+        }
+        
+        return response;
+    }
+
+    public void Dispose() => _httpClient?.Dispose();
+}
+
+// Custom batch formatter for OpenSearch bulk API
+public class OpenSearchBatchFormatter : IBatchFormatter
+{
+    private readonly string _indexName;
+
+    public OpenSearchBatchFormatter(string indexName)
+    {
+        _indexName = indexName;
+    }
+
+    public void Format(IEnumerable<string> logEvents, TextWriter output)
+    {
+        foreach (var logEvent in logEvents)
+        {
+            if (string.IsNullOrWhiteSpace(logEvent))
+                continue;
+
+            // Get current date-based index name
+            var indexName = $"auth-logs-{DateTime.UtcNow:yyyy.MM.dd}";
+            
+            // Write the bulk API action line
+            output.Write($"{{\"index\":{{\"_index\":\"{indexName}\"}}}}");
+            output.Write('\n');
+            
+            // Write the document
+            output.Write(logEvent);
+            output.Write('\n');
+        }
+    }
+}
