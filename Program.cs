@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,7 +32,6 @@ if (!string.IsNullOrEmpty(esUri))
     try
     {
         var uri = new Uri(esUri);
-        var indexName = $"auth-logs-{DateTime.UtcNow:yyyy.MM.dd}";
         var bulkEndpoint = $"{uri.Scheme}://{uri.Host}:{(uri.Port > 0 ? uri.Port : 443)}/_bulk";
         
         // Extract credentials from URI
@@ -45,7 +45,7 @@ if (!string.IsNullOrEmpty(esUri))
             requestUri: bulkEndpoint,
             queueLimitBytes: null,
             textFormatter: new ElasticsearchJsonFormatter(renderMessageTemplate: false, inlineFields: true),
-            batchFormatter: new OpenSearchBatchFormatter(indexName),
+            batchFormatter: new OpenSearchBatchFormatter(),
             httpClient: new OpenSearchHttpClient(credentials)
         );
         
@@ -133,16 +133,16 @@ public class OpenSearchHttpClient : IHttpClient
 
     public void Configure(IConfiguration configuration) { }
 
-    public async Task<HttpResponseMessage> PostAsync(string requestUri, Stream contentStream)
+    public async Task<HttpResponseMessage> PostAsync(string requestUri, Stream contentStream, CancellationToken cancellationToken)
     {
         using var content = new StreamContent(contentStream);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         
-        var response = await _httpClient.PostAsync(requestUri, content);
+        var response = await _httpClient.PostAsync(requestUri, content, cancellationToken);
         
         if (!response.IsSuccessStatusCode)
         {
-            var body = await response.Content.ReadAsStringAsync();
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             Console.Error.WriteLine($"[OpenSearch] Error: {response.StatusCode} - {body}");
         }
         
@@ -155,13 +155,6 @@ public class OpenSearchHttpClient : IHttpClient
 // Custom batch formatter for OpenSearch bulk API
 public class OpenSearchBatchFormatter : IBatchFormatter
 {
-    private readonly string _indexName;
-
-    public OpenSearchBatchFormatter(string indexName)
-    {
-        _indexName = indexName;
-    }
-
     public void Format(IEnumerable<string> logEvents, TextWriter output)
     {
         foreach (var logEvent in logEvents)
